@@ -590,7 +590,8 @@
                 <div class="hpSec"><b>KEYS</b><br>
                     WASD move · mouse look · SHIFT sprint · SPACE jump (AIR DASH doubles it)<br>
                     E market · F talk / doors · M scanner · T maglev · N city map<br>
-                    G this guide · H hide HUD · P sound &amp; music · ESC close</div>
+                    G this guide · H hide HUD · P sound &amp; music · ESC close<br>
+                    V graphics quality (AUTO adapts to your GPU · HIGH / MED / LOW lock it)</div>
                 <div class="hpSec" id="hpTouch"><b>TOUCH</b><br>
                     Left half: drag to move · right half: drag to look<br>
                     Buttons bottom-right: ACT (talk/trade/doors) · JMP · SPR (hold) · MAP · ?</div>
@@ -612,7 +613,7 @@
             <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp;·&nbsp; <kbd>MOUSE</kbd> look &nbsp;·&nbsp;
             <kbd>SHIFT</kbd> sprint &nbsp;·&nbsp; <kbd>SPACE</kbd> jump<br>
             <kbd>E</kbd> open market (inside a district) &nbsp;·&nbsp; <kbd>ESC</kbd> close / release mouse<br>
-            <kbd>M</kbd> scanner &nbsp;·&nbsp; <kbd>T</kbd> maglev &nbsp;·&nbsp; <kbd>F</kbd> talk &nbsp;·&nbsp; <kbd>N</kbd> city map &nbsp;·&nbsp; <kbd>H</kbd> HUD &nbsp;·&nbsp; <kbd>P</kbd> sound / music
+            <kbd>M</kbd> scanner &nbsp;·&nbsp; <kbd>T</kbd> maglev &nbsp;·&nbsp; <kbd>F</kbd> talk &nbsp;·&nbsp; <kbd>N</kbd> city map &nbsp;·&nbsp; <kbd>H</kbd> HUD &nbsp;·&nbsp; <kbd>P</kbd> sound / music &nbsp;·&nbsp; <kbd>V</kbd> graphics
         </div>
         <div id="avatarRow"></div>
         <div id="startHelp">HOW TO PLAY</div>
@@ -1021,6 +1022,8 @@
                 return n;
             }
 
+            var HEAT_EVT = { dt: 0 };   // reused per-frame bounty payload (HOT+ risk)
+
             var RANKS = [
                 { at: 0, name: 'STREET RAT' },
                 { at: 12000, name: 'RUNNER' },
@@ -1058,6 +1061,7 @@
                 avatar: 0,                     // preset index
                 day: 1,                        // in-game day counter
                 city: 0,                       // which city the run is standing in
+                gfx: 0,                        // graphics: 0 auto, 1..3 locked tiers
                 home: { tier: -1, mode: '', missed: 0, inv: {} },  // housing + home stash
                 deco: { owned: {} },           // furniture bought at the estate terminal
                 energy: 100,                   // 0..100; FRAYED below 25
@@ -1094,8 +1098,9 @@
             // ------------------------------------------------------------------ renderer
             var renderer, scene, camera, clock;
             var colliders = [];        // {x,z,hw,hd,h}
-            var grid = {};             // spatial hash
+            var grid = new Map();      // spatial hash, integer keys (no string churn)
             var GCELL = 24;
+            function gkey(i, j) { return (i + 512) * 4096 + (j + 512); }
 
             // WebGL2 gate for the HDR post pipeline. When post is active the canvas
             // gets no MSAA (the scene renders into a multisampled RT instead).
@@ -1380,6 +1385,7 @@
                 var stars = new THREE.Points(g, starMat);
                 stars.frustumCulled = false;
                 worldGroup.add(stars);
+                starsObj = stars;
             }
 
             // ------------------------------------------------------------------ lights
@@ -1427,8 +1433,10 @@
                 var x0 = Math.floor((c.x - c.hw) / GCELL), x1 = Math.floor((c.x + c.hw) / GCELL);
                 var z0 = Math.floor((c.z - c.hd) / GCELL), z1 = Math.floor((c.z + c.hd) / GCELL);
                 for (var i = x0; i <= x1; i++) for (var j = z0; j <= z1; j++) {
-                    var k = i + ',' + j;
-                    (grid[k] || (grid[k] = [])).push(c);
+                    var k = gkey(i, j);
+                    var cell = grid.get(k);
+                    if (!cell) grid.set(k, cell = []);
+                    cell.push(c);
                 }
                 return c;
             }
@@ -1444,7 +1452,7 @@
                     var z0 = Math.floor((c.z - c.hd) / GCELL), z1 = Math.floor((c.z + c.hd) / GCELL);
                     for (var gx = x0; gx <= x1; gx++) {
                         for (var gz = z0; gz <= z1; gz++) {
-                            var cell = grid[gx + ',' + gz];
+                            var cell = grid.get(gkey(gx, gz));
                             if (!cell) continue;
                             var ci = cell.indexOf(c);
                             if (ci >= 0) cell.splice(ci, 1);
@@ -1453,13 +1461,21 @@
                 }
                 list.length = 0;
             }
+            // hot path (player + 10 camera-ray probes per frame): returns a shared
+            // scratch array — every caller consumes it before the next query
+            var ncScratch = [], ncStamp = 0;
             function nearColliders(x, z, r) {
-                var out = [], seen = new Set();
+                var out = ncScratch;
+                out.length = 0;
+                ncStamp++;
                 var x0 = Math.floor((x - r) / GCELL), x1 = Math.floor((x + r) / GCELL);
                 var z0 = Math.floor((z - r) / GCELL), z1 = Math.floor((z + r) / GCELL);
                 for (var i = x0; i <= x1; i++) for (var j = z0; j <= z1; j++) {
-                    var a = grid[i + ',' + j]; if (!a) continue;
-                    for (var k = 0; k < a.length; k++) if (!seen.has(a[k])) { seen.add(a[k]); out.push(a[k]); }
+                    var a = grid.get(gkey(i, j)); if (!a) continue;
+                    for (var k = 0; k < a.length; k++) {
+                        var c = a[k];
+                        if (c._q !== ncStamp) { c._q = ncStamp; out.push(c); }
+                    }
                 }
                 return out;
             }
@@ -1471,6 +1487,9 @@
             var buildingMats = [];
             var neonSignMats = [], neonGlowMats = [], lampGlows = [];
             var wetStreakMat = null;     // ground reflection smears, driven by wetness
+            var wetStreakMesh = null;    // its mesh, hidden entirely when dry
+            var starsObj = null;         // star points, hidden by day
+            var rainPts = null, dustPts = null;   // particle fields, hidden at zero opacity
             var towerTops = [];          // tall roofs: [px, h, pz, w, d, lotIndex]
             var sigMats = [];            // traffic-signal phase groups, cycled in updateEnvironment
             var holoUni = null;          // holo billboard shader uniforms
@@ -2129,6 +2148,7 @@
                     sim.instanceMatrix.needsUpdate = true;
                     if (sim.instanceColor) sim.instanceColor.needsUpdate = true;
                     scene.add(sim);
+                    wetStreakMesh = sim;
                 }
 
                 // rooftop clutter + comm masts
@@ -2482,6 +2502,7 @@
                 }
                 return { map: tex(map), em: tex(em) };
             }
+            var stallGeo = shared(new THREE.BoxGeometry(1, 1, 1));   // stalls are scaled instances
             var districtVisuals = [];
             var vendorStalls = [];   // first stall per district, captured for vendor placement
             function buildDistrictPlazas() {
@@ -2610,23 +2631,32 @@
                     shafts: [shaft, shaft2], arc: arc
                 });
 
-                // small stalls around the plaza edge (flavour + collision)
+                // small stalls around the plaza edge (flavour + collision) — one
+                // InstancedMesh per district, per-district emissive tint kept.
+                // Seeded rr() draw order is identical to the old per-mesh builder.
+                var stallMat = new THREE.MeshStandardMaterial({
+                    color: 0x1a1c2c, emissive: col, emissiveIntensity: 0.07,
+                    roughness: .6, metalness: .5
+                });
+                var stallIM = new THREE.InstancedMesh(stallGeo, stallMat, 7);
+                stallIM.castShadow = true;
+                stallIM.receiveShadow = true;
+                var stM = new THREE.Matrix4(), stQ = new THREE.Quaternion(),
+                    stP = new THREE.Vector3(), stS = new THREE.Vector3();
                 for (var k = 0; k < 7; k++) {
                     var a = (k / 7) * Math.PI * 2 + rr(-.2, .2);
                     var r = d.radius + rr(2, 5.5);
                     var sx = d.pos.x + Math.cos(a) * r, sz = d.pos.z + Math.sin(a) * r;
                     var w = rr(3, 5), dp = rr(3, 5), h = rr(2.6, 4.2);
-                    var stall = new THREE.Mesh(new THREE.BoxGeometry(w, h, dp),
-                        new THREE.MeshStandardMaterial({
-                            color: 0x1a1c2c, emissive: col, emissiveIntensity: 0.07,
-                            roughness: .6, metalness: .5
-                        }));
-                    stall.position.set(sx, h / 2, sz);
-                    stall.castShadow = true; stall.receiveShadow = true;
-                    scene.add(stall);
+                    stP.set(sx, h / 2, sz);
+                    stS.set(w, h, dp);
+                    stM.compose(stP, stQ, stS);
+                    stallIM.setMatrixAt(k, stM);
                     addCollider(sx, sz, w / 2, dp / 2, h);
                     if (k === 0) vendorStalls[i] = { x: sx, z: sz, w: w, d: dp };  // pure read
                 }
+                stallIM.instanceMatrix.needsUpdate = true;
+                scene.add(stallIM);
                 });
             }
 
@@ -2724,10 +2754,13 @@
                         world.wetness * 0.05;
                 }
                 if (fireflyPts) {
-                    fireflyPts.rotation.y += dt * 0.045;
-                    fireflyPts.position.y = 0.15 * Math.sin(t * 0.5);
                     fireflyPts.material.opacity =
                         nfN * (world.weather === 0 ? 1 : 0.15) * (0.4 + 0.25 * Math.sin(t * 1.7));
+                    fireflyPts.visible = fireflyPts.material.opacity > 0.005 && !world.interior;
+                    if (fireflyPts.visible) {
+                        fireflyPts.rotation.y += dt * 0.045;
+                        fireflyPts.position.y = 0.15 * Math.sin(t * 0.5);
+                    }
                 }
                 // birds fly by day, roost at night and in storms
                 var birdsOut = nfN < 0.45 && world.weather < 2;
@@ -2753,15 +2786,18 @@
 
             // ------------------------------------------------------------------ hover traffic
             var traffic = [];
-            // hover car assets — hoisted so city rebuilds reuse one set.
-            // Model front is +x; the group is yawed to face travel direction.
+            // hover car assets — one geometry + material set for the whole fleet,
+            // drawn as 5 InstancedMeshes instead of 26 Groups × 5 Meshes (~130 draws).
+            // Model front is +x; per-car yaw/roll are composed into instance matrices.
             var carBodyGeo = shared(new THREE.BoxGeometry(2.9, 0.42, 1.4));
             var carCabinGeo = shared(new THREE.BoxGeometry(1.3, 0.36, 1.05));
             var carHeadGeo = shared(new THREE.BoxGeometry(0.06, 0.10, 1.0));
             var carTailGeo = shared(new THREE.BoxGeometry(0.06, 0.12, 1.15));
-            var carPaints = [0x141a2c, 0x1e1626, 0x11202a, 0x241a14].map(function (p) {
-                return shared(new THREE.MeshStandardMaterial({ color: p, roughness: .32, metalness: .85 }));
-            });
+            var carGlowGeo = shared(new THREE.PlaneGeometry(4.4, 2.4));
+            var CAR_PAINT_COLS = [0x141a2c, 0x1e1626, 0x11202a, 0x241a14];
+            var carBodyMat = shared(new THREE.MeshStandardMaterial({
+                color: 0xffffff, roughness: .32, metalness: .85   // paint via instanceColor
+            }));
             var carCanopyMat = shared(new THREE.MeshStandardMaterial({
                 color: 0x0b1120, roughness: .12, metalness: .9,
                 emissive: 0x16243f, emissiveIntensity: .5
@@ -2771,54 +2807,49 @@
             var carGlowMat = shared(new THREE.MeshBasicMaterial({
                 map: glowTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
             }));
+            var TRAF_IMS = null;
             function buildTraffic() {
                 var scene = worldGroup;
                 traffic.length = 0;
-                var bodyGeo = carBodyGeo, cabinGeo = carCabinGeo, headGeo = carHeadGeo, tailGeo = carTailGeo;
-                var paints = carPaints, canopyMat = carCanopyMat, headMat = carHeadMat, tailMat = carTailMat;
-                var glowMat = carGlowMat;
-                for (var i = 0; i < CITIES[CUR_CITY].cars; i++) {
-                    var g = new THREE.Group();
-                    var inner = new THREE.Group();       // rolls around the travel axis
-                    g.add(inner);
-                    var body = new THREE.Mesh(bodyGeo, paints[ri2(0, paints.length - 1)]);
-                    body.castShadow = true;
-                    inner.add(body);
-                    var cabin = new THREE.Mesh(cabinGeo, canopyMat);
-                    cabin.position.set(-0.15, 0.36, 0);
-                    inner.add(cabin);
-                    var head = new THREE.Mesh(headGeo, headMat);
-                    head.position.set(1.48, 0, 0);
-                    inner.add(head);
-                    var tail = new THREE.Mesh(tailGeo, tailMat);
-                    tail.position.set(-1.48, 0.05, 0);
-                    inner.add(tail);
-
-                    // NOTE: the rnd() draws below match the old builder 1:1 — the main
+                var n = CITIES[CUR_CITY].cars;
+                TRAF_IMS = {
+                    body: new THREE.InstancedMesh(carBodyGeo, carBodyMat, n),
+                    cabin: new THREE.InstancedMesh(carCabinGeo, carCanopyMat, n),
+                    head: new THREE.InstancedMesh(carHeadGeo, carHeadMat, n),
+                    tail: new THREE.InstancedMesh(carTailGeo, carTailMat, n),
+                    glow: new THREE.InstancedMesh(carGlowGeo, carGlowMat, n)
+                };
+                ['body', 'cabin', 'head', 'tail', 'glow'].forEach(function (k) {
+                    TRAF_IMS[k].instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+                    TRAF_IMS[k].frustumCulled = false;
+                    scene.add(TRAF_IMS[k]);
+                });
+                TRAF_IMS.body.castShadow = true;
+                var tmpC = new THREE.Color();
+                for (var i = 0; i < n; i++) {
+                    // NOTE: the seeded draws below match the old builder 1:1 — the main
                     // stream must not shift or the rain field and beyond regenerate
-                    var c = new THREE.Color(rnd() < .5 ? 0xff3355 : 0x66ccff);
-                    var gl = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 2.4), glowMat.clone());
-                    gl.material.color = c; gl.material.opacity = .5;
-                    gl.rotation.x = -Math.PI / 2;
-                    gl.position.y = -0.34;
-                    g.add(gl);
+                    TRAF_IMS.body.setColorAt(i, tmpC.setHex(CAR_PAINT_COLS[ri2(0, CAR_PAINT_COLS.length - 1)]));
+                    TRAF_IMS.glow.setColorAt(i, tmpC.setHex(rnd() < .5 ? 0xff3355 : 0x66ccff));
                     var axis = rnd() < .5 ? 'x' : 'z';
                     var lane = (ri(-BHALF, BHALF)) * CITY.block + CITY.block / 2 - CITY.street / 2;
                     var y = rr(14, 52);
                     var speed = rr(14, 30) * (rnd() < .5 ? 1 : -1);
+                    var px, pz, yaw;
                     if (axis === 'x') {
-                        g.position.set(rr(-EDGE, EDGE), y, lane);
-                        g.rotation.y = speed > 0 ? 0 : Math.PI;
+                        px = rr(-EDGE, EDGE); pz = lane;
+                        yaw = speed > 0 ? 0 : Math.PI;
                     } else {
-                        g.position.set(lane, y, rr(-EDGE, EDGE));
-                        g.rotation.y = speed > 0 ? -Math.PI / 2 : Math.PI / 2;
+                        px = lane; pz = rr(-EDGE, EDGE);
+                        yaw = speed > 0 ? -Math.PI / 2 : Math.PI / 2;
                     }
-                    scene.add(g);
                     traffic.push({
-                        o: g, inner: inner, axis: axis, speed: speed, glow: gl,
+                        axis: axis, speed: speed, x: px, z: pz, yaw: yaw,
                         baseY: y, ph: rr2(0, 6.28)
                     });
                 }
+                if (TRAF_IMS.body.instanceColor) TRAF_IMS.body.instanceColor.needsUpdate = true;
+                if (TRAF_IMS.glow.instanceColor) TRAF_IMS.glow.instanceColor.needsUpdate = true;
             }
 
             // ------------------------------------------------------------------ NPCs
@@ -4717,6 +4748,8 @@
                 PL.camYaw = Math.PI;                       // camera by the door, looking in
                 camPos.set(p.cx, 2.5, p.cz - p.d / 2 - 1);
                 world.riskRate = 0;
+                // the sun is off indoors — freeze the whole-city shadow pass too
+                renderer.shadowMap.autoUpdate = false;
                 SFX.door(true);
             }
             function useDoor(d) {
@@ -4747,6 +4780,8 @@
                     PL.vy = 0; PL.grounded = true;
                     PL.camYaw = ex.yaw;
                     camPos.set(ex.x - Math.sin(ex.yaw) * 8, 5, ex.z - Math.cos(ex.yaw) * 8);
+                    renderer.shadowMap.autoUpdate = true;
+                    renderer.shadowMap.needsUpdate = true;
                     $('fade').style.opacity = 0;
                     SFX.door(false);
                 }, 260);
@@ -4763,13 +4798,16 @@
 
             // ---------------- per-frame interior life ----------------
             var intPointNear = -1;
-            function updateInteriors(dt) {
-                if (world.doorT > 0) world.doorT -= dt;
-                // warehouse door glow reflects lease state
+            // warehouse/gate door glow reflects lease/unlock state — polled on the
+            // 0.4 s UI timer instead of every frame
+            function updateDoorGlow() {
                 for (var di3 = 0; di3 < DOORS.length; di3++) {
                     var D3 = DOORS[di3];
                     if (D3.avail) D3.mat.emissiveIntensity = D3.avail() ? 0.7 : 0.12;
                 }
+            }
+            function updateInteriors(dt) {
+                if (world.doorT > 0) world.doorT -= dt;
                 if (!world.interior) { intPointNear = -1; world.inVip = false; return; }
                 var p = INTERIORS[world.interior];
                 // nearest interact point
@@ -5133,6 +5171,7 @@
                 var pts = new THREE.Points(g, m);
                 pts.frustumCulled = false;
                 scene.add(pts);
+                rainPts = pts;
             }
 
             // ------------------------------------------------------------------ world build/clear
@@ -5146,17 +5185,8 @@
                 for (var i = 0; i < colliders.length; i++)
                     if (colliders[i].keep) keepCols.push(colliders[i]);
                 colliders.length = 0;
-                grid = {};
-                for (var k = 0; k < keepCols.length; k++) {
-                    var kc = keepCols[k];
-                    var x0 = Math.floor((kc.x - kc.hw) / GCELL), x1 = Math.floor((kc.x + kc.hw) / GCELL);
-                    var z0 = Math.floor((kc.z - kc.hd) / GCELL), z1 = Math.floor((kc.z + kc.hd) / GCELL);
-                    colliders.push(kc);
-                    for (var gx = x0; gx <= x1; gx++) for (var gz = z0; gz <= z1; gz++) {
-                        var gk = gx + ',' + gz;
-                        (grid[gk] || (grid[gk] = [])).push(kc);
-                    }
-                }
+                grid.clear();
+                for (var k = 0; k < keepCols.length; k++) addColliderObj(keepCols[k]);
                 // GPU cleanup — shared boot assets are spared
                 worldGroup.traverse(function (o) {
                     if (o.isMesh || o.isPoints || o.isSprite) {
@@ -5180,6 +5210,9 @@
                 sigMats = [];
                 holoUni = null;
                 wetStreakMat = null;
+                wetStreakMesh = null;
+                starsObj = null;
+                TRAF_IMS = null;
                 natureRipple = null;
                 // physical-event bodies re-anchor on the next spawn
                 for (var rv = 0; rv < 4; rv++) raidVis[rv] = null;
@@ -5429,6 +5462,7 @@
                 var pts = new THREE.Points(g, m);
                 pts.frustumCulled = false;
                 scene.add(pts);
+                dustPts = pts;
             })();
 
             // ------------------------------------------------------------------ post pipeline
@@ -5675,7 +5709,9 @@
                 POST.compMat.uniforms.tScene.value = POST.sceneRT.texture;
                 POST.compMat.uniforms.tBloom.value = POST.bloomA.texture;
                 POST.compMat.uniforms.tGod.value = POST.godRT.texture;
-                POST.compMat.uniforms.uGod.value = POST.godW;
+                // the pass above only renders when godW > 0.01 — clamp the sample
+                // weight to zero below that so stale godRT contents never bleed in
+                POST.compMat.uniforms.uGod.value = POST.godW > 0.01 ? POST.godW : 0;
                 POST.compMat.uniforms.uTime.value = (performance.now() * 0.001) % 61.3;
                 postPass(POST.compMat, null);
             }
@@ -5690,6 +5726,42 @@
                 POST.bloomB.setSize(W >> 2, H >> 2);
                 POST.bloomC.setSize(W >> 3, H >> 3);
                 POST.godRT.setSize(W >> 2, H >> 2);
+            }
+
+            // ---------------- adaptive quality governor ----------------
+            // Sheds resolution/shadow load when the frame-time EMA runs hot, and
+            // climbs back (up to a SHARPER cap than the old fixed 1.85 pixel ratio)
+            // when there's headroom. S.gfx: 0 = auto, 1..3 = locked HIGH/MED/LOW.
+            var GFX_TIERS = [
+                { name: 'HIGH', pr: 2.0, shadow: 2048, rs: 1.0 },
+                { name: 'MED', pr: 1.5, shadow: 2048, rs: 0.85 },
+                { name: 'LOW', pr: 1.0, shadow: 1024, rs: 0.7 }
+            ];
+            var GFX = { tier: 0, ema: 16, hot: 0, cool: 0, fps: 60 };
+            function applyQuality(t) {
+                GFX.tier = clamp(t, 0, GFX_TIERS.length - 1);
+                var q = GFX_TIERS[GFX.tier];
+                renderer.setPixelRatio(Math.min(devicePixelRatio, q.pr));
+                renderer.setSize(innerWidth, innerHeight);
+                if (sun.shadow.mapSize.x !== q.shadow) {
+                    sun.shadow.mapSize.set(q.shadow, q.shadow);
+                    if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+                }
+                RENDER_SCALE = q.rs;
+                resizePost();
+            }
+            function gfxTick(rawDt) {
+                GFX.ema = GFX.ema * 0.94 + rawDt * 1000 * 0.06;
+                GFX.fps = 1000 / Math.max(GFX.ema, 1);
+                if (S.gfx !== 0 || !started) return;      // manual lock / attract mode
+                if (GFX.ema > 22 && GFX.tier < GFX_TIERS.length - 1) {
+                    GFX.hot += rawDt;
+                    if (GFX.hot > 2) { GFX.hot = 0; GFX.cool = 0; applyQuality(GFX.tier + 1); }
+                } else GFX.hot = 0;
+                if (GFX.ema < 15 && GFX.tier > 0) {
+                    GFX.cool += rawDt;
+                    if (GFX.cool > 10) { GFX.cool = 0; applyQuality(GFX.tier - 1); }
+                } else GFX.cool = 0;
             }
 
             // ------------------------------------------------------------------ player rig
@@ -6117,10 +6189,15 @@
                 }
                 return f;
             }
+            var nfMemo = -1, nfMemoKey = -1;
             function nightFactor() {
-                // 1 at deep night, 0 at midday
+                // 1 at deep night, 0 at midday — memoized per dayTime value since
+                // four per-frame systems ask for it
+                if (world.dayTime === nfMemoKey) return nfMemo;
+                nfMemoKey = world.dayTime;
                 var s = Math.sin(world.dayTime * Math.PI * 2);
-                return clamp(1 - (s + 0.25) / 1.1, 0, 1);
+                nfMemo = clamp(1 - (s + 0.25) / 1.1, 0, 1);
+                return nfMemo;
             }
             function midPrice(di, itemId) {
                 var m = modelById(itemId);
@@ -6153,11 +6230,15 @@
 
             function tickMarkets(dt) {
                 var models = tradeableModels();
+                // random-walk noise scaled by sqrt(dt·frame) so the market's
+                // per-second volatility is identical whether this runs every frame,
+                // at the throttled 8 Hz cadence, or in performSleepSkip's 1 s steps
+                var noiseAmp = Math.sqrt(dt * 0.0167);
                 // global trends: slow mean-reverting random walk per model
                 models.forEach(function (m) {
                     ensureMarket(m);
                     var t = S.trend[m.id];
-                    t += (1 - t) * 0.06 * dt + (rnd() - 0.5) * 0.10 * dt;
+                    t += (1 - t) * 0.06 * dt + (rnd() - 0.5) * 0.10 * noiseAmp;
                     S.trend[m.id] = clamp(t, 0.55, 1.85);
                 });
                 // local supply/demand relaxes back toward the global level;
@@ -6165,7 +6246,7 @@
                 DISTRICTS.forEach(function (d, i) {
                     models.forEach(function (m) {
                         var l = S.local[i][m.id];
-                        l += (1 - l) * 0.10 * dt + (rnd() - 0.5) * 0.075 * d.vol * tierOf(m).vol * dt;
+                        l += (1 - l) * 0.10 * dt + (rnd() - 0.5) * 0.075 * d.vol * tierOf(m).vol * noiseAmp;
                         S.local[i][m.id] = clamp(l, 0.42, 2.6);
                     });
                 });
@@ -6997,7 +7078,7 @@
                 rate *= 1 - buffMag('synth');           // SYNTH: running cooler
                 if (UI.open || DLG.open) rate *= 0.5;   // inside a booth / mid-conversation
                 world.riskRate = rate;
-                if (riskTag(rate) >= 2) bountyNotify('heat', { dt: dt });
+                if (riskTag(rate) >= 2) { HEAT_EVT.dt = dt; bountyNotify('heat', HEAT_EVT); }
 
                 if (rate < 0.006) {
                     var rtD = restedTier();
@@ -7880,7 +7961,7 @@
                         quest: S.quest,
                         courier: S.courier, bounties: S.bounties, stash: S.stash, stash2: S.stash2,
                         drone: S.drone, gambleNet: S.gambleNet, avatar: S.avatar,
-                        day: S.day, snd: AUDIO.mode, city: CUR_CITY,
+                        day: S.day, snd: AUDIO.mode, city: CUR_CITY, gfx: S.gfx,
                         home: S.home, energy: Math.round(S.energy), buffs: S.buffs, deco: S.deco,
                         dayT: world.dayTime, story: S.story
                     }));
@@ -7919,6 +8000,8 @@
                 S.avatar = o.avatar || 0;
                 S.day = o.day || 1;
                 S.city = o.city === 1 ? 1 : 0;
+                S.gfx = (typeof o.gfx === 'number' && o.gfx >= 0 && o.gfx <= 3) ? o.gfx : 0;
+                if (S.gfx > 0) applyQuality(S.gfx - 1);
                 S.home = (o.home && typeof o.home.tier === 'number' && o.home.tier >= -1 && o.home.tier <= 3 &&
                     (o.home.tier < 0 || o.home.mode === 'rent' || o.home.mode === 'own'))
                     ? o.home : { tier: -1, mode: '', missed: 0, inv: {} };
@@ -8143,6 +8226,15 @@
                     $('mapWrap').style.display = UI.hudOn ? 'block' : 'none';
                     $('ticker').style.display = UI.hudOn ? 'block' : 'none';
                 }
+                if (e.code === 'KeyV') {
+                    S.gfx = (S.gfx + 1) % 4;               // 0 auto → HIGH → MED → LOW
+                    if (S.gfx > 0) applyQuality(S.gfx - 1);
+                    toast('GFX · ' + (S.gfx === 0
+                        ? 'AUTO (' + GFX_TIERS[GFX.tier].name + ')'
+                        : GFX_TIERS[GFX.tier].name) +
+                        ' · ' + Math.round(GFX.fps) + ' FPS', '#00f0ff');
+                    blip(700, .06, 'square', .06);
+                }
                 if (e.code === 'KeyP') {
                     AUDIO.mode = (AUDIO.mode + 1) % 3;
                     AUDIO.on = AUDIO.mode > 0;
@@ -8180,11 +8272,16 @@
                 PL.camDist = clamp(PL.camDist + Math.sign(e.deltaY) * 0.7, 3.2, 16);
             }, { passive: true });
 
+            var resizeDeb = 0;
             addEventListener('resize', function () {
                 camera.aspect = innerWidth / innerHeight;
                 camera.updateProjectionMatrix();
+                // re-apply the governor's pixel ratio (DPI/zoom can change between
+                // monitors) and debounce the 5-render-target rebuild during drags
+                renderer.setPixelRatio(Math.min(devicePixelRatio, GFX_TIERS[GFX.tier].pr));
                 renderer.setSize(innerWidth, innerHeight);
-                resizePost();
+                clearTimeout(resizeDeb);
+                resizeDeb = setTimeout(resizePost, 150);
             });
 
             // start screen — avatar preset cards (built before the click handler so
@@ -8250,6 +8347,8 @@
 
             // ------------------------------------------------------------------ movement
             var tmpV = new THREE.Vector3();
+            var Y_AXIS = new THREE.Vector3(0, 1, 0);
+            var colRes = [0, 0];   // shared result — callers read it immediately
             function collide(px, pz, r) {
                 var list = nearColliders(px, pz, r + 4);
                 for (var i = 0; i < list.length; i++) {
@@ -8262,7 +8361,8 @@
                         else pz += (dz > 0 ? oz : -oz);
                     }
                 }
-                return [px, pz];
+                colRes[0] = px; colRes[1] = pz;
+                return colRes;
             }
 
             function updatePlayer(dt) {
@@ -8304,7 +8404,7 @@
                     if (PL.stepAcc > 2.4) { PL.stepAcc = 0; SFX.step(); }
                 }
                 if (moving) {
-                    tmpV.set(s, 0, f).normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), PL.camYaw);
+                    tmpV.set(s, 0, f).normalize().applyAxisAngle(Y_AXIS, PL.camYaw);
                     var nx = player.position.x + tmpV.x * spd * dt;
                     var nz = player.position.z + tmpV.z * spd * dt;
                     var res = collide(nx, nz, 0.55);
@@ -8329,7 +8429,11 @@
                         player.position.z -= (player.position.z > 0 ? 1 : -1) * Math.min(1, (az - soft) / 14) * 9 * dt;
                     }
                 }
-                $('edgeWarn').style.opacity = over > 1.5 ? Math.min(1, (over - 1.5) / 6) : 0;
+                var ew = over > 1.5 ? Math.min(1, (over - 1.5) / 6) : 0;
+                if (ew !== PL.lastEdgeWarn) {
+                    PL.lastEdgeWarn = ew;
+                    $('edgeWarn').style.opacity = ew;
+                }
 
                 // gravity / jump / platform step
                 var groundY = 0;
@@ -8413,12 +8517,13 @@
             }
 
             var camTarget = new THREE.Vector3();
+            var camDesired = new THREE.Vector3();
             function updateCamera(dt) {
                 var head = tmpV.set(player.position.x, player.position.y + 1.6, player.position.z);
                 var dist = PL.camDist;
                 if (world.interior) dist = Math.min(dist, INTERIORS[world.interior].camMax);
                 var cy = Math.cos(PL.pitch), sy = Math.sin(PL.pitch);
-                var desired = new THREE.Vector3(
+                var desired = camDesired.set(
                     head.x + Math.sin(PL.camYaw) * dist * cy,
                     Math.max(head.y + dist * sy + 0.9, 0.6),   // never dip under the street
                     head.z + Math.cos(PL.camYaw) * dist * cy
@@ -8449,15 +8554,21 @@
                 day: { top: 0x2f5fb8, mid: 0x74a3d8, bot: 0xbdd0e6, sun: 0xfff0cc, amb: 0x8fa8cc, hemi: 0x88aaff, fog: 0x9fb3cc, fogD: 0.0048, sunI: 1.25, ambI: 0.75 },
                 dusk: { top: 0x1a2050, mid: 0x8a3a80, bot: 0xff6a4a, sun: 0xff7a3a, amb: 0x4a4070, hemi: 0x6a5aa0, fog: 0x3a2a48, fogD: 0.0086, sunI: 0.5, ambI: 0.52 }
             };
+            // mixed palette is written into one preallocated object — this runs
+            // every frame and used to allocate 7 Colors + an object per call
+            var PAL_KEYS = ['top', 'mid', 'bot', 'sun', 'amb', 'hemi', 'fog'];
+            var PAL_OUT = { fogD: 0, sunI: 0, ambI: 0 };
+            PAL_KEYS.forEach(function (k) { PAL_OUT[k] = new THREE.Color(); });
+            var palTmp = new THREE.Color();
             function mixPal(a, b, t) {
-                var o = {};
-                ['top', 'mid', 'bot', 'sun', 'amb', 'hemi', 'fog'].forEach(function (k) {
-                    o[k] = new THREE.Color(a[k]).lerp(new THREE.Color(b[k]), t);
-                });
-                o.fogD = lerp(a.fogD, b.fogD, t);
-                o.sunI = lerp(a.sunI, b.sunI, t);
-                o.ambI = lerp(a.ambI, b.ambI, t);
-                return o;
+                for (var i = 0; i < PAL_KEYS.length; i++) {
+                    var k = PAL_KEYS[i];
+                    PAL_OUT[k].setHex(a[k]).lerp(palTmp.setHex(b[k]), t);
+                }
+                PAL_OUT.fogD = lerp(a.fogD, b.fogD, t);
+                PAL_OUT.sunI = lerp(a.sunI, b.sunI, t);
+                PAL_OUT.ambI = lerp(a.ambI, b.ambI, t);
+                return PAL_OUT;
             }
             function palAt(dt01) {
                 // 0 midnight, .25 dawn, .5 noon, .75 dusk
@@ -8604,9 +8715,11 @@
                     AUDIO.rainGain.gain.value = world.wetness * (world.weather === 2 ? 0.22 : 0.12);
                 }
                 if (AUDIO.humGain) AUDIO.humGain.gain.value = 0.03 + nf * 0.035;
-                if (AUDIO.mus) {
+                if (AUDIO.mus && (AUDIO.mode === 2 || AUDIO.musGain.gain.value > 0.001)) {
                     // music follows the city: night brings the bass, deep night the arp,
                     // heat brings drums, rain darkens the filter and ducks everything
+                    // (skipped entirely once music is off and faded out — 4 AudioParam
+                    // writes per frame otherwise cross to the audio thread for nothing)
                     var M2 = AUDIO.mus;
                     var tag2 = riskTag(world.riskRate);
                     var mk = Math.min(1, dt * 1.5);
@@ -8667,33 +8780,72 @@
 
                 applyInteriorEnv();
 
-                // hud clock
+                // fully hide zero-opacity layers — the GPU otherwise rasterizes
+                // 5200 rain verts, stars and streak quads at alpha 0 all day
+                if (rainPts) rainPts.visible = rainUni.uOpacity.value > 0.005;
+                if (dustPts) dustPts.visible = dustUni.uOpacity.value > 0.005;
+                if (starsObj) starsObj.visible = starMat.opacity > 0.005;
+                if (wetStreakMesh) wetStreakMesh.visible = wetStreakMat.opacity > 0.005;
+
+                // hud clock — the displayed minute only changes every few seconds,
+                // so skip the string building + DOM writes until it does
                 var hh = Math.floor(world.dayTime * 24), mn = Math.floor((world.dayTime * 24 % 1) * 60);
-                $('clock').textContent = String(hh).padStart(2, '0') + ':' + String(mn).padStart(2, '0');
-                var phase = hh < 5 ? 'DEEP NIGHT' : hh < 8 ? 'DAWN' : hh < 17 ? 'DAY' : hh < 20 ? 'DUSK' : 'NIGHT';
-                $('weather').textContent = phase + ' · ' + WEATHER_NAMES[world.weather] +
-                    ' · ' + CITIES[CUR_CITY].name;
+                var clockKey = hh * 60 + mn + world.weather * 10000 + CUR_CITY * 100000;
+                if (clockKey !== world.lastClockKey) {
+                    world.lastClockKey = clockKey;
+                    $('clock').textContent = String(hh).padStart(2, '0') + ':' + String(mn).padStart(2, '0');
+                    var phase = hh < 5 ? 'DEEP NIGHT' : hh < 8 ? 'DAWN' : hh < 17 ? 'DAY' : hh < 20 ? 'DUSK' : 'NIGHT';
+                    $('weather').textContent = phase + ' · ' + WEATHER_NAMES[world.weather] +
+                        ' · ' + CITIES[CUR_CITY].name;
+                }
             }
 
+            var trafM = new THREE.Matrix4(), trafQ = new THREE.Quaternion(), trafQ2 = new THREE.Quaternion(),
+                trafE = new THREE.Euler(), trafP = new THREE.Vector3(), trafO = new THREE.Vector3(),
+                trafS = new THREE.Vector3(1, 1, 1);
+            function setCarPart(im, i, x, y, z, q, ox, oy, oz) {
+                trafO.set(ox, oy, oz).applyQuaternion(q);
+                trafP.set(x + trafO.x, y + trafO.y, z + trafO.z);
+                trafM.compose(trafP, q, trafS);
+                im.setMatrixAt(i, trafM);
+            }
             function updateTraffic(dt) {
+                if (!TRAF_IMS) return;
                 var tg = 0.22 + nightFactor() * 0.55;   // headlights matter at night
+                carGlowMat.opacity = tg;                 // one write, whole fleet
                 var tt = performance.now() * 0.001;
                 for (var i = 0; i < traffic.length; i++) {
                     var c = traffic[i];
-                    c.glow.material.opacity = tg;
                     if (c.axis === 'x') {
-                        c.o.position.x += c.speed * dt;
-                        if (c.o.position.x > EDGE) c.o.position.x = -EDGE;
-                        if (c.o.position.x < -EDGE) c.o.position.x = EDGE;
+                        c.x += c.speed * dt;
+                        if (c.x > EDGE) c.x = -EDGE;
+                        if (c.x < -EDGE) c.x = EDGE;
                     } else {
-                        c.o.position.z += c.speed * dt;
-                        if (c.o.position.z > EDGE) c.o.position.z = -EDGE;
-                        if (c.o.position.z < -EDGE) c.o.position.z = EDGE;
+                        c.z += c.speed * dt;
+                        if (c.z > EDGE) c.z = -EDGE;
+                        if (c.z < -EDGE) c.z = EDGE;
                     }
                     // hover bob + gentle roll around the travel axis
-                    c.o.position.y = c.baseY + Math.sin(tt * 1.7 + c.ph) * 0.35;
-                    c.inner.rotation.x = Math.sin(tt * 1.1 + c.ph) * 0.05;
+                    var y = c.baseY + Math.sin(tt * 1.7 + c.ph) * 0.35;
+                    var roll = Math.sin(tt * 1.1 + c.ph) * 0.05;
+                    trafE.set(roll, c.yaw, 0, 'YXZ');
+                    trafQ.setFromEuler(trafE);
+                    setCarPart(TRAF_IMS.body, i, c.x, y, c.z, trafQ, 0, 0, 0);
+                    setCarPart(TRAF_IMS.cabin, i, c.x, y, c.z, trafQ, -0.15, 0.36, 0);
+                    setCarPart(TRAF_IMS.head, i, c.x, y, c.z, trafQ, 1.48, 0, 0);
+                    setCarPart(TRAF_IMS.tail, i, c.x, y, c.z, trafQ, -1.48, 0.05, 0);
+                    // underglow: flat quad, yaw-aligned, no roll
+                    trafE.set(-Math.PI / 2, c.yaw, 0, 'YXZ');
+                    trafQ2.setFromEuler(trafE);
+                    trafP.set(c.x, y - 0.34, c.z);
+                    trafM.compose(trafP, trafQ2, trafS);
+                    TRAF_IMS.glow.setMatrixAt(i, trafM);
                 }
+                TRAF_IMS.body.instanceMatrix.needsUpdate = true;
+                TRAF_IMS.cabin.instanceMatrix.needsUpdate = true;
+                TRAF_IMS.head.instanceMatrix.needsUpdate = true;
+                TRAF_IMS.tail.instanceMatrix.needsUpdate = true;
+                TRAF_IMS.glow.instanceMatrix.needsUpdate = true;
             }
 
             // ------------------------------------------------------------------ minimap
@@ -9116,30 +9268,24 @@
                     }
                 }
 
-                var hint = $('hint');
+                // build the hint, but only touch the DOM when it actually changes —
+                // innerHTML re-parse every frame was one of the costliest loop items
+                var ht = null;
                 var anyPanel = UI.open || DLG.open || ESTATE.open || IPANEL.open;
-                if (world.interior && !anyPanel) {
-                    var p2 = INTERIORS[world.interior];
-                    if (vendorNear >= 0) {
-                        hint.innerHTML = 'PRESS <b>F</b> — TALK TO ' + VENDORS[vendorNear].name;
-                        hint.style.opacity = 1;
-                    } else if (intPointNear >= 0) {
-                        hint.innerHTML = 'PRESS <b>F</b> — ' + p2.points[intPointNear].label;
-                        hint.style.opacity = 1;
-                    } else {
-                        hint.style.opacity = 0;
-                    }
-                } else if (doorNear >= 0 && !anyPanel) {
-                    hint.innerHTML = 'PRESS <b>F</b> — ' + DOORS[doorNear].label();
-                    hint.style.opacity = 1;
-                } else if (vendorNear >= 0 && !anyPanel) {
-                    hint.innerHTML = 'PRESS <b>F</b> — TALK TO ' + VENDORS[vendorNear].name;
-                    hint.style.opacity = 1;
-                } else if (currentMarket !== null && !anyPanel) {
-                    hint.innerHTML = 'PRESS <b>E</b> TO TRADE IN ' + DISTRICTS[currentMarket].name;
-                    hint.style.opacity = 1;
-                } else {
-                    hint.style.opacity = 0;
+                if (!anyPanel) {
+                    if (world.interior) {
+                        var p2 = INTERIORS[world.interior];
+                        if (vendorNear >= 0) ht = 'PRESS <b>F</b> — TALK TO ' + VENDORS[vendorNear].name;
+                        else if (intPointNear >= 0) ht = 'PRESS <b>F</b> — ' + p2.points[intPointNear].label;
+                    } else if (doorNear >= 0) ht = 'PRESS <b>F</b> — ' + DOORS[doorNear].label();
+                    else if (vendorNear >= 0) ht = 'PRESS <b>F</b> — TALK TO ' + VENDORS[vendorNear].name;
+                    else if (currentMarket !== null) ht = 'PRESS <b>E</b> TO TRADE IN ' + DISTRICTS[currentMarket].name;
+                }
+                if (ht !== UI.lastHint) {
+                    UI.lastHint = ht;
+                    var hint = $('hint');
+                    if (ht) hint.innerHTML = ht;
+                    hint.style.opacity = ht ? 1 : 0;
                 }
             }
 
@@ -9147,7 +9293,9 @@
             var acc = 0, saveTimer = 0, uiTimer = 0;
             function animate() {
                 requestAnimationFrame(animate);
-                var dt = Math.min(clock.getDelta(), 0.05);
+                var rawDt = clock.getDelta();
+                gfxTick(rawDt);
+                var dt = Math.min(rawDt, 0.05);
                 if (!started) dt *= 0.25;   // idle attract mode runs slower
 
                 world.district = updatePlayer(dt);
@@ -9159,7 +9307,9 @@
                 updateTraffic(dt);
                 updateNPCs(dt);
                 updateProximity();
-                tickMarkets(dt);
+                // economy at 8 Hz — the tick math is timestep-invariant
+                world.mktAcc = (world.mktAcc || 0) + dt;
+                if (world.mktAcc >= 0.125) { tickMarkets(world.mktAcc); world.mktAcc = 0; }
                 updateWorldEvents(dt);
                 if (started) {
                     if (world.interior) {
@@ -9212,6 +9362,7 @@
                 uiTimer += dt;
                 if (uiTimer > 0.4) {
                     uiTimer = 0;
+                    updateDoorGlow();
                     drawMinimap();
                     if (UI.bigMap) drawBigMap();
                     if (UI.open && UI.tab !== 'upgrades') renderMarket();
@@ -9282,6 +9433,7 @@
                 UI: UI, syncTabs: syncTabs, DEN: DEN, DEN_STAKES: DEN_STAKES,
                 FURNITURE: FURNITURE, UPGRADES: UPGRADES, CITIES: CITIES,
                 buyPrice: buyPrice, sellPrice: sellPrice, ensureMarket: ensureMarket,
+                GFX: GFX, GFX_TIERS: GFX_TIERS, applyQuality: applyQuality,
                 getMarket: function () { return currentMarket; },
                 setMarket: function (i) { currentMarket = i; },
                 getColliders: function () { return colliders; },
