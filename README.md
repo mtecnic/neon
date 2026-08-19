@@ -10,7 +10,7 @@
 ![three.js](https://img.shields.io/badge/three.js-r160-ff00aa?style=for-the-badge&labelColor=0a0f26)
 ![zero deps](https://img.shields.io/badge/DEPENDENCIES-zero-f5ff5a?style=for-the-badge&labelColor=0a0f26)
 ![vanilla js](https://img.shields.io/badge/VANILLA-JS-00ff88?style=for-the-badge&labelColor=0a0f26)
-![tests](https://img.shields.io/badge/HEADLESS_TESTS-41_green-b066ff?style=for-the-badge&labelColor=0a0f26)
+![tests](https://img.shields.io/badge/HEADLESS_TESTS-56_green-b066ff?style=for-the-badge&labelColor=0a0f26)
 
 <br>
 
@@ -115,7 +115,7 @@ Full touch controls on mobile — virtual stick + action buttons.
 - **Hand-built HDR post pipeline** — MSAA → dual-kawase bloom → god rays → ACES + chromatic aberration + grain + scanlines in one composite shader (WebGL2, graceful fallback)
 - **Procedural audio** — the entire soundtrack and every SFX synthesized live via WebAudio; the bass shows up at night, the drums show up when your street risk does
 - **Deterministic world-gen** — seeded mulberry32 streams; the market catalog derives from your save seed and the real-world clock, so reload-scumming rerolls nothing
-- **Battle-tested** — ships with a headless Node test harness (`neon_tests/`) that boots the *actual game* under a virtual clock: 41 checks across boot, travel, economy, save/load, regressions, plus a 10,000-action fuzz soak and a mutation self-test. No money glitches. No teleport corruption. We checked. Twice. Deterministically.
+- **Battle-tested** — ships with a headless Node test harness (`neon_tests/`) that boots the *actual game* under a virtual clock: 56 checks across boot, travel, economy, save/load, regressions, plus a 10,000-action fuzz soak and a mutation self-test. No money glitches. No teleport corruption. We checked. Twice. Deterministically.
 
 ```
 cd neon_tests && node tests.js        # full suite, run twice for determinism

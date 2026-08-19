@@ -845,7 +845,7 @@
             function tierOf(m) { return TIERS[Math.min(ageOf(m), 3)]; }
             function tierMult(m) {
                 var age = ageOf(m);
-                if (age >= 3) return 0.70 * Math.pow(1.13, age - 2);
+                if (age >= 3) return 0.70 * Math.pow(1.13, age - 3);
                 return TIERS[age].mult;
             }
             function baseValue(m) { return m.rawBase * tierMult(m); }
@@ -1491,6 +1491,7 @@
             var starsObj = null;         // star points, hidden by day
             var rainPts = null, dustPts = null;   // particle fields, hidden at zero opacity
             var towerTops = [];          // tall roofs: [px, h, pz, w, d, lotIndex]
+            var bridgeSpots = [];        // QA: placed skybridge centers, {mx, mz, axis, ai, bi}
             var sigMats = [];            // traffic-signal phase groups, cycled in updateEnvironment
             var holoUni = null;          // holo billboard shader uniforms
             var lots = [];               // per-lot capture from buildCity (doors attach to these)
@@ -1720,7 +1721,7 @@
                     return false;
                 };
                 // one tree = trunk (free, into mastXf) + 2 canopy blobs + under-glow + collider
-                var addTree = function (x, z, baseY) {
+                var addTree = function (x, z, baseY, skipCol) {
                     var th = rr3(1.9, 2.6);
                     mastXf.push(new THREE.Matrix4().compose(
                         new THREE.Vector3(x, baseY + th / 2, z), Q0, new THREE.Vector3(1.1, th, 1.1)));
@@ -1737,7 +1738,7 @@
                     treeGlowXf.push(new THREE.Matrix4().compose(
                         new THREE.Vector3(x, baseY + 0.09, z), QFLAT, new THREE.Vector3(gs, gs, 1)));
                     treeGlowCol.push(new THREE.Color(rr3(0.0, 0.2), rr3(0.85, 1.0), rr3(0.7, 0.95)));
-                    addCollider(x, z, 0.30, 0.30, 2.4);
+                    if (!skipCol) addCollider(x, z, 0.30, 0.30, 2.4);
                     treeSpots.push([x, z, baseY]);
                 };
 
@@ -1770,7 +1771,7 @@
                                     !nearDistrict(c, pzz, 9) && Math.hypot(c, pzz - 8) > 12) {
                                     roofXf.push(new THREE.Matrix4().compose(
                                         new THREE.Vector3(c, 0.45, pzz), Q0, new THREE.Vector3(3.2, 0.9, 1.4)));
-                                    addTree(c, pzz, 0.9);
+                                    addTree(c, pzz, 0.9, true);
                                     addCollider(c, pzz, 1.6, 0.7, 2);
                                 }
                             }
@@ -1886,8 +1887,7 @@
                             if (ovX >= 3 && gapZ >= 12 && gapZ <= 40) {
                                 cands.push({
                                     i: i, j: j, axis: 'z', gap: gapZ,
-                                    c0: (Math.max(A[0] - A[3] / 2, B[0] - B[3] / 2) + Math.min(A[0] + A[3] / 2, B[0] + B[3] / 2)) / 2,
-                                    mid: (A[2] + B[2]) / 2
+                                    c0: (Math.max(A[0] - A[3] / 2, B[0] - B[3] / 2) + Math.min(A[0] + A[3] / 2, B[0] + B[3] / 2)) / 2
                                 });
                             }
                             var ovZ = Math.min(A[2] + A[4] / 2, B[2] + B[4] / 2) - Math.max(A[2] - A[4] / 2, B[2] - B[4] / 2);
@@ -1895,8 +1895,7 @@
                             if (ovZ >= 3 && gapX >= 12 && gapX <= 40) {
                                 cands.push({
                                     i: i, j: j, axis: 'x', gap: gapX,
-                                    c0: (Math.max(A[2] - A[4] / 2, B[2] - B[4] / 2) + Math.min(A[2] + A[4] / 2, B[2] + B[4] / 2)) / 2,
-                                    mid: (A[0] + B[0]) / 2
+                                    c0: (Math.max(A[2] - A[4] / 2, B[2] - B[4] / 2) + Math.min(A[2] + A[4] / 2, B[2] + B[4] / 2)) / 2
                                 });
                             }
                         }
@@ -1938,8 +1937,10 @@
                         }
                         if (blocked) continue;
                         used[cd.i] = used[cd.j] = 1; made++;
-                        var mx = cd.axis === 'z' ? cd.c0 : cd.mid;
-                        var mz = cd.axis === 'z' ? cd.mid : cd.c0;
+                        var faceMid = (s0 + s1) / 2;
+                        var mx = cd.axis === 'z' ? cd.c0 : faceMid;
+                        var mz = cd.axis === 'z' ? faceMid : cd.c0;
+                        bridgeSpots.push({ mx: mx, mz: mz, axis: cd.axis, a: A2, b: B2 });
                         bridgeXf.push(new THREE.Matrix4().compose(
                             new THREE.Vector3(mx, yB, mz), Q0,
                             cd.axis === 'z' ? new THREE.Vector3(2.6, 3.0, cd.gap + 4) : new THREE.Vector3(cd.gap + 4, 3.0, 2.6)));
@@ -2995,7 +2996,7 @@
                         s = pAlong + (Math.random() < 0.5 ? -1 : 1) * (40 + Math.random() * 70);
                     }
                     if (k < KMIN || k > KMAX) continue;
-                    if (Math.abs(s) > EDGE - 8 || Math.abs(LINE(k)) > EDGE - 8) continue;
+                    if (Math.abs(s) > EDGE - 8 || Math.abs(LINE(k)) > EDGE - 8 || Math.abs(s) > NPC_TURN) continue;
                     n.axis = axis; n.k = k; n.s = s;
                     n.sgn = Math.random() < 0.5 ? 1 : -1;
                     n.lat = n.sgn * SIDE_OFF + n.jit;
@@ -3781,6 +3782,18 @@
             }
             function rebuildShell(p, w, d, ceil, camMax) {
                 if (p.grp) {
+                    p.grp.traverse(function (o) {
+                        if (o.isMesh || o.isPoints || o.isSprite) {
+                            if (o.geometry && !SHARED_RES.has(o.geometry)) o.geometry.dispose();
+                            var ms = Array.isArray(o.material) ? o.material : [o.material];
+                            for (var mi = 0; mi < ms.length; mi++) {
+                                if (ms[mi] && !SHARED_RES.has(ms[mi])) {
+                                    if (ms[mi].map && !SHARED_RES.has(ms[mi].map)) ms[mi].map.dispose();
+                                    ms[mi].dispose();
+                                }
+                            }
+                        }
+                    });
                     scene.remove(p.grp);
                     removeColliders(p.cols);
                     removeColliders(p.dressCols || []);
@@ -3962,7 +3975,9 @@
 
             function dressHome(tier) {
                 var p = INTERIORS.home;
-                var dk = tier + ':' + decoSig();
+                // avatar index is part of the key: the accent color is baked into
+                // trims, so a wardrobe change must trigger a re-dress
+                var dk = tier + ':' + S.avatar + ':' + decoSig();
                 if (p.dressKey === dk && p.built) return;
                 COL_KEEP = true;   // interior colliders survive city rebuilds
                 var dm = HOME_DIMS[tier];
@@ -4638,7 +4653,9 @@
                 sign.position.set(0, h + 0.75, 0.1);
                 g.add(sign);
                 scene.add(g);
-                addCollider(x, z, Math.max(0.9, w / 2), 0.5, h);
+                var hw = nx !== 0 ? 0.5 : Math.max(0.9, w / 2);
+                var hd = nx !== 0 ? Math.max(0.9, w / 2) : 0.5;
+                addCollider(x, z, hw, hd, h);
                 return slabMat;
             }
             // find a real building wall near a target, facing it — doors attach to
@@ -5051,6 +5068,11 @@
                     applyAvatar(parseInt(t.dataset.i, 10));
                     UI.avatarPicked = true; UI.avatarPick = S.avatar;
                     toast('WARDROBE — ' + AVATARS[S.avatar].name, '#f5ff5a');
+                    if (world.interior === 'home') {
+                        // re-dress on the spot so the room's accent trims match
+                        dressHome(Math.max(0, S.home.tier));
+                        INTERIORS.home.grp.visible = true;
+                    }
                     renderIntPanel();
                 } else if (act === 'i_hdep') doHomeDeposit(t.dataset.item, 'max');
                 else if (act === 'i_hwd') doHomeWithdraw(t.dataset.item, t.dataset.q === 'max' ? 'max' : 1);
@@ -5203,6 +5225,7 @@
                 WORLD_RES.texs.length = 0;
                 // per-city capture state
                 towerTops.length = 0;
+                bridgeSpots.length = 0;
                 lots.length = 0;
                 neonSignMats.length = 0;
                 neonGlowMats.length = 0;
@@ -5257,9 +5280,10 @@
                 TEX_TRACK = false;
                 // rain draws sit at the tail of the seeded ladder — first build only
                 if (!world.rainBuilt) { world.rainBuilt = true; buildRainField(); }
-                // active market events keep their bodies across a rebuild
+                // active market events keep their bodies across a rebuild —
+                // but only THIS city's events get physical form here
                 for (var ei = 0; ei < S.events.length; ei++)
-                    if (S.events[ei].phys) spawnEventPhys(S.events[ei]);
+                    if (S.events[ei].phys && S.events[ei].city === ci) spawnEventPhys(S.events[ei]);
                 if (window.NEON) NEON.DISTRICTS = DISTRICTS;
             }
 
@@ -5751,6 +5775,9 @@
                 resizePost();
             }
             function gfxTick(rawDt) {
+                // ignore pathological frames (tab switches, debugger pauses) — one
+                // multi-second delta would poison the EMA and instantly trip `hot`
+                if (rawDt > 0.25) return;
                 GFX.ema = GFX.ema * 0.94 + rawDt * 1000 * 0.06;
                 GFX.fps = 1000 / Math.max(GFX.ema, 1);
                 if (S.gfx !== 0 || !started) return;      // manual lock / attract mode
@@ -6184,7 +6211,8 @@
                     var e = S.events[i];
                     if (e.fam && e.fam !== m.fam) continue;
                     if (e.tier != null && e.tier !== Math.min(ageOf(m), 3)) continue;
-                    if (e.district != null && e.district !== di) continue;
+                    if (e.district != null &&
+                        (e.district !== di || (e.city !== undefined && e.city !== CUR_CITY))) continue;
                     f *= e.mult;
                 }
                 return f;
@@ -6225,6 +6253,7 @@
                 if (S.owned.neural) p *= 1.08;
                 var rt = restedTier();
                 if (rt >= 0) p *= 1 + HOMES[rt].sell;   // RESTED: a sharp mind sells better
+                p = Math.min(p, midPrice(di, itemId));  // sell can never exceed mid — no free buy/sell round-trip
                 return Math.max(1, Math.round(p));
             }
 
@@ -6315,14 +6344,14 @@
                 function () {
                     var d = ri(0, 3);
                     return {
-                        text: 'CORPORATE DUMP in ' + DISTRICTS[d].name, district: d,
+                        text: 'CORPORATE DUMP in ' + DISTRICTS[d].name, district: d, city: CUR_CITY,
                         mult: rr(0.62, 0.82), t: rr(28, 50), kind: 'info'
                     };
                 },
                 function () {
                     var d = ri(0, 3);
                     return {
-                        text: 'RAID at ' + DISTRICTS[d].name + ' — stock scarce', district: d,
+                        text: 'RAID at ' + DISTRICTS[d].name + ' — stock scarce', district: d, city: CUR_CITY,
                         mult: rr(1.25, 1.62), t: rr(25, 45), kind: 'bad', phys: 'raid'
                     };
                 },
@@ -6335,7 +6364,7 @@
                 function () {
                     var d = ri(0, 3);
                     return {
-                        text: 'BULK CONVOY lands at ' + DISTRICTS[d].name, district: d,
+                        text: 'BULK CONVOY lands at ' + DISTRICTS[d].name, district: d, city: CUR_CITY,
                         mult: rr(0.68, 0.86), t: rr(25, 45), kind: 'info', phys: 'convoy'
                     };
                 },
@@ -6888,7 +6917,8 @@
             var crates = [];
             function raidAt(di) {
                 for (var i = 0; i < S.events.length; i++)
-                    if (S.events[i].phys === 'raid' && S.events[i].district === di) return S.events[i];
+                    if (S.events[i].phys === 'raid' && S.events[i].district === di &&
+                        S.events[i].city === CUR_CITY) return S.events[i];
                 return null;
             }
             function makeRaidVis(di) {
@@ -6971,6 +7001,7 @@
                 for (var di = 0; di < 4; di++) { raidActive[di] = false; convoyActive[di] = false; }
                 for (var i = 0; i < S.events.length; i++) {
                     var e = S.events[i];
+                    if (e.city !== undefined && e.city !== CUR_CITY) continue;   // other city's trouble
                     if (e.phys === 'raid') raidActive[e.district] = true;
                     else if (e.phys === 'convoy') convoyActive[e.district] = true;
                 }
@@ -7802,7 +7833,7 @@
                 if (di === null || di < 0 || !curStash().own[di]) return;
                 var have = S.inv[id] || 0;
                 var n = q === 'max' ? have : Math.min(q, have);
-                if (n <= 0) return;
+                if (n <= 0) { toast('NOTHING TO DEPOSIT', '#ff6fae'); return; }
                 S.inv[id] -= n;
                 var m = modelById(id);
                 if (!S.inv[id] && m && ageOf(m) > 3) delete S.inv[id];
@@ -7816,6 +7847,7 @@
                 var di = diOpt !== undefined ? diOpt : currentMarket;
                 if (di === null || di < 0 || !curStash().own[di]) return;
                 var have = curStash().inv[di][id] || 0;
+                if (have <= 0) { toast('NOTHING TO WITHDRAW', '#ff6fae'); return; }
                 var space = S.capacity - cargoUsed();
                 var n = Math.min(q === 'max' ? have : q, have, space);
                 if (n <= 0) { toast('NO CARGO SPACE', '#ff6fae'); return; }
@@ -9415,6 +9447,9 @@
                 gameNow: gameNow, sleepStart: sleepStart, useDoor: useDoor, DOORS: DOORS,
                 dressHome: dressHome,
                 modelAt: modelAt, newestGen: newestGen, tradeableModels: tradeableModels, inStock: inStock,
+                ageOf: ageOf, tierMult: tierMult, hashRng: hashRng,
+                respawnNPC: respawnNPC, getNpcTurn: function () { return NPC_TURN; },
+                getBridgeSpots: function () { return bridgeSpots; },
                 // headless test/QA surface — plain references to existing closures
                 doBuy: doBuy, doSell: doSell, doUpgrade: doUpgrade, doTransit: doTransit,
                 openMarket: openMarket, closeMarket: closeMarket, renderMarket: renderMarket,
